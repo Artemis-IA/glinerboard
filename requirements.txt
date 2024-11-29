@@ -1,0 +1,8 @@
+huggingface_hub
+transformers
+datasets
+evaluate
+torch
+pandas
+tqdm
+PyYAML

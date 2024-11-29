@@ -1,0 +1,96 @@
+name: GLINER Model Leaderboard CI/CD
+
+on:
+  schedule:
+    # Exécution quotidienne à minuit UTC
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    inputs:
+      force_update:
+        description: 'Force une mise à jour manuelle'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  PYTHONUNBUFFERED: 1
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
+  SPACE_NAME: "gliner-leaderboard"  # Remplacez par le nom de votre Space
+
+jobs:
+  update-leaderboard:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Discover New GLINER Models
+        id: model-discovery
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python scripts/discover_gliner_models.py \
+            --output models_to_benchmark.json \
+            --max-models 50 \
+            --force-update ${{ github.event.inputs.force_update || false }}
+
+      - name: Benchmark New Models
+        id: benchmark
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python scripts/benchmark_gliner_models.py \
+            --input models_to_benchmark.json \
+            --output benchmark_results.json
+
+      - name: Update Leaderboard
+        id: update-leaderboard
+        run: |
+          python scripts/update_leaderboard.py \
+            --benchmark-results benchmark_results.json \
+            --output-leaderboard leaderboard.csv
+
+      - name: Commit and Push Changes
+        run: |
+          git config user.name 'GitHub Actions Bot'
+          git config user.email 'actions@github.com'
+          git add leaderboard.csv requirements.txt
+          git commit -m "Update GLINER Model Leaderboard" || echo "No changes to commit"
+          git push
+
+      - name: Update Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          # Installer le CLI Hugging Face
+          pip install huggingface_hub
+
+          # Cloner le Space
+          huggingface-cli login --token $HF_TOKEN
+          git clone https://huggingface:${HF_TOKEN}@huggingface.co/spaces/${SPACE_NAME} space_repo
+
+          # Copier le leaderboard mis à jour dans le Space
+          cp leaderboard.csv space_repo/
+
+          # Naviguer dans le répertoire du Space
+          cd space_repo
+
+          # Ajouter, committer et pousser les changements
+          git add leaderboard.csv
+          git commit -m "Update Leaderboard Data" || echo "No changes to commit"
+          git push
